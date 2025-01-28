@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const config = require('../config/storage.config');
+const { Readable } = require('stream');
 
 class StorageService {
   constructor() {
@@ -58,6 +59,37 @@ class StorageService {
     } else {
       const filePath = path.join(process.cwd(), config.local.uploadDir, fileId);
       return await fs.readFile(filePath);
+    }
+  }
+
+  async getFileStream(fileId) {
+    if (config.storageType === 'azure') {
+      const blockBlobClient = this.containerClient.getBlockBlobClient(fileId);
+      const downloadResponse = await blockBlobClient.download(0);
+      return downloadResponse.readableStreamBody;
+    } else {
+      const filePath = path.join(process.cwd(), config.local.uploadDir, fileId);
+      return fs.createReadStream(filePath);
+    }
+  }
+
+  async getFileInfo(fileId) {
+    if (config.storageType === 'azure') {
+      const blockBlobClient = this.containerClient.getBlockBlobClient(fileId);
+      const properties = await blockBlobClient.getProperties();
+      return {
+        size: properties.contentLength,
+        type: properties.contentType,
+        name: fileId
+      };
+    } else {
+      const filePath = path.join(process.cwd(), config.local.uploadDir, fileId);
+      const stats = await fs.stat(filePath);
+      return {
+        size: stats.size,
+        type: 'application/octet-stream', // You might want to implement mime-type detection
+        name: fileId
+      };
     }
   }
 }

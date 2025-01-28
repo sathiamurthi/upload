@@ -4,6 +4,7 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 const storageService = require('../services/storage.service');
+const { BackgroundUploadService, uploadEmitter } = require('../services/background-upload.service');
 
 // Get upload URLs for multiple files
 router.post('/get-upload-url', async (req, res) => {
@@ -89,4 +90,59 @@ router.get('/download/:fileId', async (req, res) => {
   }
 });
 
-module.exports = router; 
+// Add new route for background multiple file upload
+router.post('/background-upload', upload.array('files', 10), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files provided' });
+    }
+
+    const sessionId = BackgroundUploadService.createUploadSession(req.files);
+
+    // Start background processing
+    process.nextTick(async () => {
+      for (const file of req.files) {
+        try {
+          const { fileId } = await storageService.generateUploadUrl(file.originalname);
+          await storageService.uploadLocalFile(fileId, file.buffer);
+          
+          BackgroundUploadService.updateProgress(sessionId, {
+            originalName: file.originalname,
+            fileId: fileId,
+            size: file.size,
+            mimeType: file.mimetype
+          });
+        } catch (error) {
+          BackgroundUploadService.updateFailed(sessionId, error);
+        }
+      }
+    });
+
+    res.json({
+      message: 'Upload started',
+      sessionId: sessionId
+    });
+  } catch (error) {
+    console.error('Error starting upload:', error);
+    res.status(500).json({ error: 'Failed to start upload' });
+  }
+});
+
+// Add route to check upload status
+router.get('/upload-status/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const status = BackgroundUploadService.getStatus(sessionId);
+  
+  if (!status) {
+    return res.status(404).json({ error: 'Upload session not found' });
+  }
+  
+  res.json(status);
+});
+
+// Add WebSocket support for real-time progress updates
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ noServer: true });
+
+// Export the WebSocket server to be used in app.js
+module.exports = { router, wss }; 
